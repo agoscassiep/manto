@@ -158,7 +158,7 @@ const pts=n=>{const v=Math.abs(n).toFixed(2).replace(/\.?0+$/,"");return(n>0?"+"
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 let tab="dash";
-const TABS=[["dash","Dashboard"],["log","Bitácora"],["gate","Gate pre-trade"],["reglas","Reglas"],["cal","Calendario"],["cfg","Config"]];
+const TABS=[["dash","Dashboard"],["log","Bitácora"],["gate","Gate pre-trade"],["reglas","Reglas"],["cal","Calendario"],["anual","Resumen"],["cfg","Config"]];
 function renderNav(){$("#nav").innerHTML=TABS.map(([k,l])=>`<button class="tab ${k===tab?'active':''}" onclick="go('${k}')">${l}</button>`).join("");}
 window.go=k=>{tab=k;render();window.scrollTo(0,0);};
 
@@ -234,6 +234,10 @@ function renderDash(){
     <div class="sec-title">Curva de capital</div>
     ${equitySVG(s.sorted)}
     <div class="row" style="justify-content:space-between;margin-top:8px"><span class="muted" style="font-size:12px">Inicio ${money0(C().capital)}</span><span class="muted" style="font-size:12px">Actual ${money0(C().capital+s.dollars)}</span></div>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-top:12px">
+    <div class="card"><div class="sec-title">Operaciones: ganadas / perdidas / BE</div>${chartRow(pieSVG([{value:s.wins,color:'#1d9e75'},{value:s.losses,color:'#c0392b'},{value:s.be,color:'#b0aca2'}],false),[['#1d9e75','Ganadas',s.wins],['#c0392b','Perdidas',s.losses],['#b0aca2','Break-even',s.be]])}</div>
+    <div class="card"><div class="sec-title">Puntos ganados vs perdidos</div>${chartRow(pieSVG([{value:s.gp,color:'#1d9e75'},{value:Math.abs(s.lp),color:'#c0392b'}],true),[['#1d9e75','Ganados',pts(s.gp)],['#c0392b','Perdidos',pts(s.lp)]])}</div>
   </div>`;
 }
 function statCard(l,v,cls){return `<div class="soft stat"><div class="lbl">${l}</div><div class="val ${cls}">${v}</div></div>`;}
@@ -250,6 +254,28 @@ function equitySVG(sorted){
     <path d="${d}" fill="none" stroke="${up?'#1d9e75':'#c0392b'}" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
 }
 
+function pieSVG(segs,hole){
+  const tot=segs.reduce((a,s)=>a+s.value,0);
+  if(tot<=0)return '<div class="muted" style="font-size:13px;padding:20px 0">Sin datos todavía.</div>';
+  const R=52,CX=60,CY=60;let a0=-Math.PI/2,paths="";
+  segs.forEach(s=>{if(s.value<=0)return;const frac=s.value/tot,a1=a0+frac*2*Math.PI;
+    if(frac>=0.9999){paths+=`<circle cx="${CX}" cy="${CY}" r="${R}" fill="${s.color}"/>`;}
+    else{const x0=CX+R*Math.cos(a0),y0=CY+R*Math.sin(a0),x1=CX+R*Math.cos(a1),y1=CY+R*Math.sin(a1),lg=(a1-a0)>Math.PI?1:0;
+      paths+=`<path d="M${CX} ${CY} L${x0.toFixed(2)} ${y0.toFixed(2)} A${R} ${R} 0 ${lg} 1 ${x1.toFixed(2)} ${y1.toFixed(2)} Z" fill="${s.color}"/>`;}
+    a0=a1;});
+  const hc=hole?`<circle cx="${CX}" cy="${CY}" r="${(R*0.58).toFixed(1)}" fill="var(--surface)"/>`:"";
+  return `<svg viewBox="0 0 120 120" width="118" height="118">${paths}${hc}</svg>`;
+}
+function chartRow(svg,items){
+  const leg=items.map(a=>`<div style="display:flex;align-items:center;gap:7px;font-size:13px;margin:4px 0"><span style="width:11px;height:11px;border-radius:3px;background:${a[0]};display:inline-block"></span><span class="muted">${a[1]}</span><span style="margin-left:auto;font-weight:500" class="mono">${a[2]}</span></div>`).join("");
+  return `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap"><div style="flex:none">${svg}</div><div style="flex:1;min-width:130px">${leg}</div></div>`;
+}
+function barsSVG(vals){
+  const W=880,H=140,n=vals.length,mx=Math.max(1,...vals.map(v=>Math.abs(v))),gap=W/n,bw=gap*0.55,zeroY=H/2;
+  const bars=vals.map((v,i)=>{const hh=Math.abs(v)/mx*(H/2-10),x=i*gap+(gap-bw)/2,y=v>=0?zeroY-hh:zeroY;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.6,hh).toFixed(1)}" rx="2" fill="${v>=0?'#1d9e75':'#c0392b'}"/>`;}).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto"><line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="var(--border2)" stroke-width="1"/>${bars}</svg>`;
+}
 let editId=null;
 function renderLog(){
   if(!scope)scope=months()[0]||"all";
@@ -384,6 +410,40 @@ function renderCal(){
   <div class="card" style="padding:6px 0"><table><thead><tr><th>Fecha</th><th>Día</th><th>Feriado</th><th>Estado</th></tr></thead><tbody>${list}</tbody></table></div>`;
 }
 
+function renderAnual(){
+  const yrs=[...new Set(state.trades.map(t=>t.date.slice(0,4)))].sort();
+  const year=yrs.length?yrs[yrs.length-1]:"2026";
+  let bal=C().capital;const monthly=[];
+  for(let m=1;m<=12;m++){const ym=year+"-"+String(m).padStart(2,"0");
+    const list=state.trades.filter(t=>t.date.slice(0,7)===ym);const s=stats(list);bal+=s.dollars;monthly.push({m,s,bal});}
+  const sy=stats(state.trades.filter(t=>t.date.slice(0,4)===year));
+  const rows=monthly.map(o=>{const s=o.s,has=s.n>0;
+    return `<tr${has?"":' style="color:var(--muted)"'}>
+      <td style="text-transform:capitalize">${MESF[o.m-1]}</td>
+      <td class="center">${has?s.n:"—"}</td>
+      <td class="center">${has?s.wins+" / "+s.losses:"—"}</td>
+      <td class="right mono ${s.net>0?"pos":s.net<0?"neg":""}">${has?pts(s.net):"—"}</td>
+      <td class="right mono ${s.dollars>=0?"pos":"neg"}">${has?money(s.dollars):"—"}</td>
+      <td class="center">${has?Math.round(s.wr*100)+"%":"—"}</td>
+      <td class="center">${has?Math.round(s.disc*100)+"%":"—"}</td>
+      <td class="right mono">${has?money0(o.bal):"—"}</td></tr>`;}).join("");
+  return `
+  <h1 style="font-size:24px;margin-bottom:3px">Resumen ${year}</h1>
+  <div class="muted" style="font-size:14px;margin-bottom:16px">Cómo viene tu año, mes a mes.</div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px">
+    ${statCard("Operaciones",sy.n,"")}
+    ${statCard("Resultado del año",money(sy.dollars),sy.dollars>=0?"pos":"neg")}
+    ${statCard("Win rate",Math.round(sy.wr*100)+"%","")}
+    ${statCard("Disciplina",Math.round(sy.disc*100)+"%","")}
+  </div>
+  <div class="card" style="margin-bottom:16px"><div class="sec-title">Resultado neto $ por mes</div>${barsSVG(monthly.map(o=>o.s.dollars))}
+    <div style="display:grid;grid-template-columns:repeat(12,1fr);font-size:10px;color:var(--muted);text-align:center;margin-top:4px">${MES.map(x=>"<span>"+x+"</span>").join("")}</div>
+  </div>
+  <div class="card" style="padding:6px 0;overflow-x:auto">
+    <table><thead><tr><th>Mes</th><th class="center">Trades</th><th class="center">G / P</th><th class="right">Pts</th><th class="right">Resultado $</th><th class="center">Win</th><th class="center">Discip.</th><th class="right">Balance</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
 function renderCfg(){
   const c=C();
   return `
@@ -431,6 +491,7 @@ function render(){
   else if(tab==="gate")v.innerHTML=renderGate();
   else if(tab==="reglas")v.innerHTML=renderReglas();
   else if(tab==="cal")v.innerHTML=renderCal();
+  else if(tab==="anual")v.innerHTML=renderAnual();
   else v.innerHTML=renderCfg();
 }
 render();
